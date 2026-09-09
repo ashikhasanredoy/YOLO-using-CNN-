@@ -1,0 +1,16 @@
+============================================================
+BDD100K DATASET INFORMATION
+============================================================
+Source Repository: dgural/bdd100k
+Local Storage Path: /Users/macbookpro/iCloud Drive (Archive)/Documents/yolo cnn/data/bdd100k
+Total Available Samples in Metadata: 10000
+Downloaded Research Benchmark Samples: 1197
+Total Disk Usage: 148.12 MB
+
+Condition Breakdown (Selected Subset):
+  clear       : 296
+  dawn_dusk   : 296
+  fog         : 13
+  night       : 296
+  rain        : 296
+============================================================

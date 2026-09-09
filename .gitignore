@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large datasets & downloaded images
+data/bdd100k/images/*.jpg
+data/bdd100k/images/*.png
+data/bdd100k/annotations/*.json
+data/bdd100k/metadata/*.json
+!data/bdd100k/images/.gitkeep
+
+# Model checkpoints & weights
+*.pt
+*.pth
+!models/.gitkeep
+
+# Experiment logs & temp files
+results/experiment.log
+scratch/
+*.tmp

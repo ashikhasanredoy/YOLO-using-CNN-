@@ -1,0 +1,76 @@
+dataset:
+  name: "dgural/bdd100k"
+  root: "data/bdd100k"
+  images_dir: "data/bdd100k/images"
+  labels_dir: "data/bdd100k/labels"
+  annotations_dir: "data/bdd100k/annotations"
+  metadata_dir: "data/bdd100k/metadata"
+  splits_dir: "data/bdd100k/splits"
+  yolo_dir: "data/yolo"
+  max_samples: 1200 # Balanced representative research subset (captures 100% of fog, balanced across conditions)
+  download_workers: 16
+
+conditions:
+  classes:
+    0: "clear"
+    1: "rain"
+    2: "fog"
+    3: "night"
+    4: "dawn_dusk"
+  derived_low_visibility:
+    enabled: true
+    luminance_threshold: 45.0  # Mean grayscale intensity < 45
+    contrast_threshold: 35.0   # Grayscale standard deviation < 35
+
+model:
+  condition_classifier: "resnet18"
+  pretrained: true
+  num_classes: 5
+  yolo_weights: "yolo11n.pt"
+
+training:
+  seed: 42
+  epochs: 5
+  batch_size: 32
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  image_size: 224
+  num_workers: 0
+
+enhancement:
+  fixed:
+    type: "clahe"
+    clip_limit: 2.0
+    tile_grid_size: [8, 8]
+  fog:
+    patch_size: 15
+    omega: 0.95
+    t0: 0.1
+    guided_radius: 40
+    guided_eps: 0.001
+    clahe_clip: 1.5
+  rain:
+    bilateral_d: 7
+    bilateral_sigma_color: 50
+    bilateral_sigma_space: 50
+    unsharp_strength: 1.2
+    clahe_clip: 1.5
+  night:
+    gamma: 0.60
+    clahe_clip: 2.5
+    brightness_boost: 1.15
+  dawn_dusk:
+    gamma: 0.85
+    clahe_clip: 1.8
+    contrast_alpha: 1.1
+
+evaluation:
+  confidence: 0.25
+  iou: 0.50
+  imgsz: 640
+
+paths:
+  models: "models"
+  results: "results"
+  visualizations: "results/visualizations"
+  log_file: "results/experiment.log"

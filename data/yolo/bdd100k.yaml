@@ -1,0 +1,26 @@
+path: /Users/macbookpro/iCloud Drive (Archive)/Documents/yolo cnn/data/bdd100k
+train: splits/train_images.txt
+val: splits/val_images.txt
+test: splits/test_images.txt
+names:
+  0: pedestrian
+  1: rider
+  2: car
+  3: truck
+  4: bus
+  5: train
+  6: motorcycle
+  7: bicycle
+  8: traffic light
+  9: traffic sign
+coco_mapping:
+  pedestrian: 0
+  rider: 0
+  bicycle: 1
+  car: 2
+  motorcycle: 3
+  bus: 5
+  train: 6
+  truck: 7
+  traffic light: 9
+  traffic sign: 11
