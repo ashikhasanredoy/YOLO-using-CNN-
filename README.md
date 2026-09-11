@@ -12,12 +12,13 @@ An empirical, publication-grade research study investigating whether **adaptive,
 
 ## Table of Contents
 1. [Core Research Question & Hypotheses](#1-core-research-question--hypotheses)
-2. [Deep Learning vs. Classical Computer Vision Architecture](#2-deep-learning-vs-classical-computer-vision-architecture)
+2. [Deep Learning vs. Classical Computer Vision Architecture & System Methodology](#2-deep-learning-vs-classical-computer-vision-architecture--system-methodology)
 3. [Experimental Pipelines Detailed](#3-experimental-pipelines-detailed)
    * [Pipeline A — Baseline (Control Group)](#pipeline-a--baseline-control-group)
    * [Pipeline B — Fixed Enhancement (Uniform CLAHE)](#pipeline-b--fixed-enhancement-uniform-clahe)
    * [Pipeline C — Adaptive Enhancement (PyTorch CNN Router)](#pipeline-c--adaptive-enhancement-pytorch-cnn-router)
    * [Pipeline D — Oracle Enhancement (Ablation Upper Bound)](#pipeline-d--oracle-enhancement-ablation-upper-bound)
+   * [Step-by-Step Pipeline Execution Trace (Every Single Step Detailed)](#step-by-step-pipeline-execution-trace-every-single-step-detailed)
 4. [Condition-Specific Enhancement Algorithms & Mathematical Formulations](#4-condition-specific-enhancement-algorithms--mathematical-formulations)
 5. [BDD100K Dataset & Physical Visibility Metrics](#5-bdd100k-dataset--physical-visibility-metrics)
 6. [Hardware Acceleration & Compute Backends](#6-hardware-acceleration--compute-backends)
@@ -48,189 +49,559 @@ Autonomous vehicles and advanced driver assistance systems (ADAS) must reliably 
 
 ---
 
-## 2. Deep Learning vs. Classical Computer Vision Architecture
+## 2. Deep Learning vs. Classical Computer Vision Architecture & System Methodology
 
-The system is constructed as a **hybrid intelligent architecture** combining deep representation learning with deterministic, domain-specific computer vision algorithms:
+The system is constructed as a **hybrid intelligent architecture** that couples deep representation learning with domain-specific, deterministic computer vision filtering. Rather than treating image enhancement and object detection as isolated processes, the methodology formulates an integrated, multi-stage pipeline:
 
 ```
-                                  [ Input Driving Image ]
-                                             │
-                       ┌─────────────────────┴─────────────────────┐
-                       ▼                                           ▼
-             [ DEEP LEARNING #1 ]                        [ CLASSICAL CV ]
-         ResNet-18 Condition Classifier             Targeted Enhancement Filters
-            • Pretrained Backbone                       • DCP Dehazing (Fog)
-            • 5 Environmental Classes                   • Bilateral + Unsharp (Rain)
-            • CrossEntropy + Class Weights              • Gamma + CLAHE (Night)
-            • Softmax Probability Distribution          • Illumination Balancing (Dawn)
-                       │                                           │
-                       └─────────────────────┬─────────────────────┘
-                                             │
-                                             ▼
-                                   [ DEEP LEARNING #2 ]
-                               Ultralytics YOLO11n Detector
-                                   • Multi-Scale Feature Pyramids
-                                   • Spatial Pyramid Pooling (SPPF)
-                                   • Bounding Box & Class Outputs
+                                  ┌───────────────────────────┐
+                                  │   Raw Input Image (I)     │
+                                  │   H x W x 3 RGB Tensor    │
+                                  └─────────────┬─────────────┘
+                                                │
+                        ┌───────────────────────┴───────────────────────┐
+                        ▼                                               ▼
+     ┌─────────────────────────────────────┐         ┌─────────────────────────────────────┐
+     │        DEEP LEARNING MODULE #1      │         │     DETERMINISTIC CV OPERATORS      │
+     │      PyTorch ResNet-18 Classifier   │         │    Condition-Specific Enhancers     │
+     │  • Initialized with ImageNet weights│         │  • Fog: DCP Dehazing (Koschmieder)  │
+     │  • Fine-tuned 5-class linear head   │         │  • Rain: Bilateral + Unsharp Boost  │
+     │  • Class-weighted Cross-Entropy loss│         │  • Night: Power-Law Gamma + CLAHE   │
+     │  • Softmax posterior distribution   │         │  • Dawn/Dusk: Illumination Balance  │
+     │  • Argmax condition routing (\hat{c})│         │  • Clear: Identity Pass-Through     │
+     └──────────────────┬──────────────────┘         └──────────────────┬──────────────────┘
+                        │                                               │
+                        │ Condition Routing Decision (\hat{c})          │ Selected Operator E_{\hat{c}}(I)
+                        └───────────────────────┬───────────────────────┘
+                                                │
+                                                ▼
+                                  ┌───────────────────────────┐
+                                  │   Enhanced Tensor (I')    │
+                                  │   H x W x 3 RGB Radiances │
+                                  └─────────────┬─────────────┘
+                                                │
+                                                ▼
+                                  ┌───────────────────────────┐
+                                  │  DEEP LEARNING MODULE #2  │
+                                  │   Ultralytics YOLO11n     │
+                                  │ • Multi-Scale CSPDarknet  │
+                                  │ • PANet Multi-Scale Fusion│
+                                  │ • Decoupled Anchor-Free   │
+                                  │ • Frozen Pretrained Wts   │
+                                  └─────────────┬─────────────┘
+                                                │
+                                                ▼
+                                  ┌───────────────────────────┐
+                                  │   Predictions & Metrics   │
+                                  │  • Bounding Boxes (xyxy)  │
+                                  │  • Class IDs & Confidence │
+                                  │  • Precision, Recall, mAP │
+                                  └───────────────────────────┘
 ```
 
-### 1. Deep Learning Component #1: Condition Classifier (`ResNet-18`)
+---
+
+### 2.1 Formal Mathematical Problem Definition
+
+Let an unconstrained driving scene image be defined as a continuous or discrete color image tensor:
+
+$$\mathcal{X} = \{ I \in \mathbb{R}^{H \times W \times 3} \mid I(x, y, c) \in [0, 255] \}$$
+
+Let the discrete environmental condition domain $\mathcal{C}$ consist of five mutually exclusive states:
+
+$$\mathcal{C} = \{ c_0: \text{Clear}, \; c_1: \text{Rain}, \; c_2: \text{Fog}, \; c_3: \text{Night}, \; c_4: \text{Dawn/Dusk} \}$$
+
+The ground-truth object detection annotation set for an image $I$ is parameterized by $K$ ground-truth instances:
+
+$$\mathcal{Y} = \{ (\mathbf{b}_k, y_k) \}_{k=1}^{K}, \quad \mathbf{b}_k = [x_1, y_1, x_2, y_2] \in [0, 1]^4, \quad y_k \in \{0, 1, \dots, C_{det}-1\}$$
+
+The end-to-end framework operates in three sequential mathematical stages:
+1. **Condition Classification Function** $f_\theta: \mathcal{X} \to \Delta^4$, where $\Delta^4$ is the 5-dimensional probability simplex parameterized by learned weights $\theta$. The predicted condition $\hat{c}$ is obtained via the decision rule:
+   $$\hat{c} = \arg\max_{j \in \{0, 1, 2, 3, 4\}} f_\theta(I)_j$$
+2. **Deterministic Enhancement Transformation** $\mathcal{E}_{\hat{c}}: \mathcal{X} \to \mathcal{X}$, which applies a specialized non-linear spatial/frequency filtering operator indexed by the discrete condition estimate $\hat{c}$:
+   $$I' = \mathcal{E}_{\hat{c}}(I)$$
+3. **Downstream Object Detection Model** $g_\phi: \mathcal{X} \to \hat{\mathcal{Y}}$, where $\phi$ represents the pre-trained neural network parameters of the YOLO detector:
+   $$\hat{\mathcal{Y}} = g_\phi(I') = \{ (\hat{\mathbf{b}}_m, \hat{s}_m, \hat{y}_m) \}_{m=1}^{M}$$
+   where $\hat{\mathbf{b}}_m$ represents predicted bounding coordinates, $\hat{s}_m \in [\tau_{conf}, 1.0]$ denotes the detection confidence score, and $\hat{y}_m$ is the predicted object category.
+
+---
+
+### 2.2 Deep Learning Component #1: Condition Classifier CNN (`ResNet-18`)
+
 * **File**: `src/models/condition_cnn.py` | Checkpoint: `models/condition_classifier_best.pt`
-* **Architecture**: Deep convolutional neural network initialized with torchvision `ResNet-18` weights, adapted with a 5-way classification head (`Dropout(0.3) -> Linear(512, 5)`).
-* **Target Classes**: `0: Clear`, `1: Rain`, `2: Fog`, `3: Night`, `4: Dawn/Dusk`.
-* **Training Protocol**: 5 epochs using AdamW optimizer ($\text{lr}=3\times 10^{-4}$, weight decay $10^{-4}$), Cosine Annealing learning rate schedule ($\eta_{min}=10^{-6}$), and inverse-frequency class weighting to account for class imbalance (such as rare fog scenes).
-* **Accuracy**: **71.67% test accuracy** across 180 blind test samples.
+* **Network Backbone**: Deep residual convolutional network with 18 weighted layers (He et al., 2016) initialized from torchvision ImageNet-1K pretrained weights.
+* **Feature Extraction Flow**:
+  1. **Initial Convolution & Downsampling**:
+     $$\mathbf{F}_0 = \text{MaxPool}_{3 \times 3, s=2}\left( \text{ReLU}\left( \text{BatchNorm}\left( \text{Conv}_{7 \times 7, s=2}(I_{224}) \right) \right) \right) \in \mathbb{R}^{B \times 64 \times 56 \times 56}$$
+  2. **Residual Building Blocks**: Four sequential residual stages comprising pairs of $3 \times 3$ convolutions with residual skip connections:
+     $$\mathbf{x}_{l+1} = \text{ReLU}\left( \mathcal{F}(\mathbf{x}_l, \mathcal{W}_l) + \mathcal{W}_s \mathbf{x}_l \right)$$
+     where $\mathcal{W}_s$ is an identity mapping or a $1 \times 1$ convolution for dimension matching when spatial resolution halves:
+     * Stage 1: 2 BasicBlocks, 64 channels, spatial dimension $56 \times 56$.
+     * Stage 2: 2 BasicBlocks, 128 channels, spatial dimension $28 \times 28$.
+     * Stage 3: 2 BasicBlocks, 256 channels, spatial dimension $14 \times 14$.
+     * Stage 4: 2 BasicBlocks, 512 channels, spatial dimension $7 \times 7$.
+  3. **Global Adaptive Pooling**: Collapses spatial dimensions into a compact feature descriptor:
+     $$\mathbf{h} = \text{AdaptiveAvgPool2d}_{1 \times 1}(\mathbf{F}_4) \in \mathbb{R}^{B \times 512}$$
+  4. **Stochastic Regularization & Classification Head**:
+     $$\mathbf{z} = \mathbf{W}_{fc} \cdot \text{Dropout}_{p=0.3}(\mathbf{h}) + \mathbf{b}_{fc}, \quad \mathbf{W}_{fc} \in \mathbb{R}^{5 \times 512}, \; \mathbf{b}_{fc} \in \mathbb{R}^5$$
+  5. **Posterior Probability Distribution**:
+     $$P(c = j \mid I) = \sigma(\mathbf{z})_j = \frac{\exp(z_j)}{\sum_{k=0}^{4} \exp(z_k)}$$
 
-### 2. Deep Learning Component #2: Object Detector (`YOLO11n`)
-* **Engine**: Ultralytics **YOLO11n** (pretrained weights `yolo11n.pt`).
-* **Input Resolution**: $640 \times 640$ pixels.
-* **Inference Settings**: Confidence threshold $\tau_{conf} = 0.25$, Non-Maximum Suppression IoU threshold $\tau_{IoU} = 0.50$.
-* **Classes Detected**: Vehicles (cars, buses, trucks, motorcycles, bicycles), Vulnerable Road Users (pedestrians, riders), and Infrastructure (traffic lights, traffic signs).
-* **Weights Policy**: Frozen across all pipelines to guarantee strict experimental fairness.
+#### Handling Class Imbalance via Cost-Sensitive Loss
+Adverse atmospheric phenomena occur with severe natural class imbalance (e.g., fog constitutes $<1.5\%$ of natural driving datasets). To prevent majority-class collapse, inverse-frequency class weights are incorporated directly into the multi-class Cross-Entropy criterion:
 
-### 3. Classical Computer Vision Components: Deterministic Enhancers
-* Deterministic image filtering algorithms implemented in OpenCV/NumPy.
-* Compute overhead is lightweight (0.8 ms to 22.0 ms per image).
-* Explainable mathematical transformations without black-box hallucination.
+$$w_c = \frac{N_{total}}{K \cdot \max(N_c, 1)}, \quad c \in \{0, 1, 2, 3, 4\}$$
+
+$$\mathcal{L}_{CE}(\theta) = - \frac{1}{B} \sum_{i=1}^B w_{y_i} \log\left( \frac{\exp(z_{i, y_i})}{\sum_{j=0}^{4} \exp(z_{i, j})} \right)$$
+
+#### Optimization Dynamics & Hyperparameters
+* **Optimizer**: AdamW ($\beta_1 = 0.9$, $\beta_2 = 0.999$, $\epsilon = 10^{-8}$, weight decay $\lambda = 10^{-4}$).
+* **Learning Rate Schedule**: Cosine Annealing with warm restart:
+  $$\eta_t = \eta_{min} + \frac{1}{2}(\eta_{max} - \eta_{min}) \left( 1 + \cos\left(\frac{t}{T_{max}}\pi\right) \right)$$
+  where $\eta_{max} = 3 \times 10^{-4}$, $\eta_{min} = 10^{-6}$, and $T_{max} = 5$ epochs.
+* **Input Pre-Processing Pipeline**:
+  $$\text{Input } I \to \text{Resize}(224 \times 224) \to \left[ \text{RandomHorizontalFlip}(p=0.5) + \text{ColorJitter} \right]_{\text{train only}} \to \text{ToTensor} \to \text{Normalize}(\mu, \sigma)$$
+  where $\mu = [0.485, 0.456, 0.406]$ and $\sigma = [0.229, 0.224, 0.225]$.
+
+---
+
+### 2.3 Deep Learning Component #2: Object Detector (`YOLO11n`)
+
+* **Engine**: Ultralytics **YOLO11n** (`yolo11n.pt`).
+* **Detection Philosophy**: Single-stage, anchor-free, real-time convolutional object detection designed for multi-scale road obstacle recognition.
+* **Architectural Mechanics**:
+  1. **CSPDarknet Backbone**: Employs Cross-Stage Partial network connections with modified $C3k2$ blocks to maximize gradient flow and extract rich hierarchical spatial features while minimizing floating-point operations.
+  2. **Spatial Pyramid Pooling Fast (SPPF)**: Captures multi-scale receptive fields at the network bottleneck using sequential $5 \times 5$ max-pooling operations without loss of feature map resolution.
+  3. **Path Aggregation Feature Pyramid Network (PANet / FPN)**: Top-down and bottom-up multi-scale feature aggregation fusing high-level semantic abstractions with low-level spatial geometry across scales:
+     * $P_3$ ($80 \times 80$ at $640 \times 640$ input): Specialized for small targets (distant pedestrians, traffic signs).
+     * $P_4$ ($40 \times 40$): Specialized for medium targets (cars, motorcycles, cyclists).
+     * $P_5$ ($20 \times 20$): Specialized for large targets (near buses, trucks).
+  4. **Decoupled Anchor-Free Detection Head**: Decouples classification confidence scoring ($P_{cls}$) from bounding box geometric regression ($P_{box}$), resolving the alignment conflict between categorical representation and coordinate spatial offset.
+* **Experimental Rigor (Frozen Weights Guarantee)**:
+  $$\phi_{Baseline} \equiv \phi_{Fixed} \equiv \phi_{Adaptive} \equiv \phi_{Oracle}$$
+  The weights of the YOLO detector are frozen across every pipeline. This guarantees that all observed variance in Precision, Recall, and mAP is strictly attributable to the pre-processing enhancement transformations $\mathcal{E}(I)$, rather than detector fine-tuning confounders.
+* **Inference Settings & Non-Maximum Suppression (NMS)**:
+  * Input Resolution: $640 \times 640$ pixels.
+  * Confidence Threshold: $\tau_{conf} = 0.25$.
+  * IoU Suppression Threshold: $\tau_{IoU} = 0.50$.
+  * NMS Formulation: For candidate predictions $\mathcal{B} = \{b_1, \dots, b_N\}$, the bounding box with the maximum confidence score $b^*$ is selected, and all overlapping boxes $b_j$ satisfying $\text{IoU}(b^*, b_j) \ge \tau_{IoU}$ are iteratively suppressed.
 
 ---
 
 ## 3. Experimental Pipelines Detailed
 
-The research benchmark rigorously compares four pipelines on identical data:
+To test the core research questions under strict scientific control, the benchmark implements four distinct experimental pipelines evaluated on identical ground-truth samples:
 
 ```
-                            Input Image (BDD100K)
-                                      │
-            ┌─────────────────────────┼─────────────────────────┐
-            ▼                         ▼                         ▼
-      [Pipeline A]              [Pipeline B]              [Pipeline C]
-        Baseline                    Fixed                   Adaptive
-    (No Enhancement)           (Uniform CLAHE)        (PyTorch CNN Router)
-            │                         │                         │
-            │                         │            ┌────────────┴────────────┐
-            │                         │            ▼                         ▼
-            │                         │      Condition Pred         Condition Enhancer
-            │                         │     (Clear/Rain/Fog/        (DCP Dehazing, Rain
-            │                         │      Night/DawnDusk)         Bilateral, LowLight)
-            │                         │            │                         │
-            └─────────────────────────┼────────────┴─────────────────────────┘
-                                      │
-                                      ▼
-                            YOLO Object Detection
-                             (Ultralytics yolo11n)
-                                      │
-                                      ▼
-                      Evaluation & Comparative Metrics
+                                  Input Image (BDD100K)
+                                            │
+        ┌───────────────────┬───────────────┴───────────────┬───────────────────┐
+        ▼                   ▼                               ▼                   ▼
+  [Pipeline A]        [Pipeline B]                    [Pipeline C]        [Pipeline D]
+    Baseline              Fixed                         Adaptive            Oracle Bound
+ (Control Group)     (Uniform CLAHE)               (PyTorch CNN Router) (Ablation Ground Truth)
+        │                   │                               │                   │
+  I' = I (Raw)     I' = CLAHE_{2.0}(I)              ResNet-18 Classifier   Ground-Truth Label c*
+        │                   │                               │                   │
+        │                   │                         \hat{c} \in \mathcal{C}    │
+        │                   │                               │                   │
+        │                   │                        E_{\hat{c}}(I)             E_{c^*}(I)
+        │                   │                               │                   │
+        └───────────────────┼───────────────────────────────┴───────────────────┘
+                            │
+                            ▼
+                  Enhanced Tensor (I')
+                            │
+                            ▼
+              Ultralytics YOLO11n Detector
+                            │
+                            ▼
+             Comparative Detection Metrics
+            (mAP@50, mAP@50:95, Precision, Recall)
 ```
+
+| Pipeline | Enhancement Strategy | Conditioning Logic | Compute Overhead | Scientific Purpose |
+| :--- | :--- | :--- | :---: | :--- |
+| **Pipeline A (Baseline)** | None ($I' = I$) | None (Raw Camera Feed) | $0.0\text{ ms}$ | **Control Group**: Baseline benchmark of off-the-shelf YOLO under natural adverse degradation. |
+| **Pipeline B (Fixed CLAHE)** | Uniform CLAHE ($\text{clip}=2.0$) | Condition-Agnostic | $\approx 2.4\text{ ms}$ | **Industrial Prior**: Tests whether standard uniform contrast equalization works universally across weather. |
+| **Pipeline C (Adaptive CNN)** | Targeted Physical Enhancers | Dynamic ResNet-18 Router | $\approx 14.0 - 36.0\text{ ms}$ | **Test Hypothesis**: Evaluates whether intelligent condition-specific enhancement improves detector accuracy. |
+| **Pipeline D (Oracle Upper Bound)** | Targeted Physical Enhancers | Ground-Truth Labels ($c^*$) | $\approx 2.0 - 24.0\text{ ms}$ | **Ablation Bound**: Isolates physical filter effectiveness by eliminating classifier misclassification error. |
 
 ---
 
-### Pipeline A — Baseline (Control Group)
+### Pipeline A — Baseline (Negative Control Group)
 * **File**: `src/pipelines/baseline.py` | Script: `scripts/run_baseline.py`
+* **Formal Operator**: $\mathcal{E}_A(I) = I$
 * **Workflow**:
-  $$\text{Input Image } I \longrightarrow \text{YOLO11n Detector} \longrightarrow \text{Detections } \hat{Y}$$
-* **Image Transformation**: None ($I_{enhanced} = I_{original}$).
-* **Empirical Purpose**: Establishes the reference detection accuracy, precision, recall, and mAP of off-the-shelf YOLO on raw, unenhanced camera inputs across all environmental conditions.
-* **Latency**: Only the raw YOLO inference time ($\approx 6.0\text{ ms}$ on CPU).
+  $$\text{Input Image } I \longrightarrow \text{YOLO11n Detector} \longrightarrow \hat{\mathcal{Y}}_A$$
+* **Methodological Role**: Serves as the negative control group. It quantifies the raw zero-shot object detection accuracy of YOLO11n when directly exposed to rain streaks, optical fog scattering, low photon counts, and glare without image pre-filtering.
 
 ---
 
 ### Pipeline B — Fixed Enhancement (Uniform CLAHE)
 * **File**: `src/pipelines/fixed.py` | Script: `scripts/run_fixed.py`
+* **Formal Operator**: $\mathcal{E}_B(I) = \text{CLAHE}(I; \kappa = 2.0, \mathbf{G} = [8, 8])$
 * **Workflow**:
-  $$\text{Input Image } I \longrightarrow \text{Fixed CLAHE (LAB)} \longrightarrow I_{fixed} \longrightarrow \text{YOLO11n} \longrightarrow \hat{Y}$$
-* **Image Transformation**: Contrast Limited Adaptive Histogram Equalization applied to the luminance channel ($L$) in LAB space with uniform parameters:
-  * `clipLimit = 2.0`
-  * `tileGridSize = (8, 8)`
-* **Empirical Purpose**: Evaluates the widely adopted industrial assumption that applying a generic, condition-agnostic local contrast expansion filter improves object detection uniformly.
-* **Latency**: CLAHE pre-processing ($\approx 2.4\text{ ms}$) + YOLO inference ($\approx 6.0\text{ ms}$) = $\approx 8.4\text{ ms}$.
+  $$\text{Input Image } I \longrightarrow \text{BGR to LAB} \longrightarrow \text{Luminance CLAHE} \longrightarrow \text{LAB to BGR} \longrightarrow \text{YOLO11n} \longrightarrow \hat{\mathcal{Y}}_B$$
+* **Transformation Parameters**:
+  * Color Space: CIE $L^*a^*b^*$ (operates purely on the $L^*$ luminance dimension to prevent color shifts).
+  * Clip Limit $\kappa = 2.0$ (thresholds local histogram slope).
+  * Tile Grid Matrix $\mathbf{G} = 8 \times 8$ non-overlapping contextual blocks with bilinear interpolation across tile borders.
+* **Methodological Role**: Represents the conventional industrial heuristic that uniform contrast enhancement consistently assists vision models. Benchmarking Pipeline B directly tests hypothesis **H2**.
 
 ---
 
 ### Pipeline C — Adaptive Enhancement (PyTorch CNN Router)
 * **File**: `src/pipelines/adaptive.py` | Script: `scripts/run_adaptive.py`
+* **Formal Operator**: $\mathcal{E}_C(I) = \mathcal{E}_{\hat{c}}(I), \quad \text{where } \hat{c} = \arg\max_{c \in \mathcal{C}} f_\theta(I)_c$
 * **Workflow**:
-  $$\text{Input Image } I \longrightarrow \text{ResNet-18 Classifier} \longrightarrow \hat{c} \in \{\text{clear, rain, fog, night, dawn\_dusk}\} \longrightarrow \mathcal{E}_{\hat{c}}(I) \longrightarrow I_{adaptive} \longrightarrow \text{YOLO11n} \longrightarrow \hat{Y}$$
-* **Image Transformation**: Dynamically routes the image to a specialized physical enhancer:
-  * If $\hat{c} = \text{clear} \implies$ Identity pass-through (no alteration).
-  * If $\hat{c} = \text{rain} \implies$ Classical rain bilateral filter + unsharp masking + CLAHE.
-  * If $\hat{c} = \text{fog} \implies$ Dark Channel Prior (DCP) dehazing + transmission refinement.
-  * If $\hat{c} = \text{night} \implies$ Power-law Gamma illumination expansion ($\gamma=0.60$) + CLAHE.
-  * If $\hat{c} = \text{dawn\_dusk} \implies$ Midtone contrast scaling ($\gamma=0.85$, $\alpha=1.10$).
-* **Empirical Purpose**: Validates whether condition-aware filtering mitigates degradation without degrading uncorrupted scenes.
-* **Latency**: CNN classification ($\approx 12.0\text{ ms}$) + condition enhancement ($0.0 - 22.0\text{ ms}$) + YOLO inference ($\approx 6.0\text{ ms}$) = $18.0 - 40.0\text{ ms}$.
+  $$\text{Input } I \longrightarrow \text{ResNet-18 Classifier} \longrightarrow \hat{c} \longrightarrow \begin{cases}
+    \mathcal{T}_{clear}(I), & \hat{c} = \text{clear} \\
+    \mathcal{T}_{rain}(I), & \hat{c} = \text{rain} \\
+    \mathcal{T}_{fog}(I), & \hat{c} = \text{fog} \\
+    \mathcal{T}_{night}(I), & \hat{c} = \text{night} \\
+    \mathcal{T}_{dawn\_dusk}(I), & \hat{c} = \text{dawn\_dusk}
+  \end{cases} \longrightarrow I' \longrightarrow \text{YOLO11n} \longrightarrow \hat{\mathcal{Y}}_C$$
+* **Methodological Role**: The primary research subject. Pipeline C implements intelligent dynamic routing where image transformations are conditioned directly on visual context.
 
 ---
 
 ### Pipeline D — Oracle Enhancement (Ablation Upper Bound)
 * **File**: `src/pipelines/oracle.py` | Script: `scripts/run_oracle.py`
+* **Formal Operator**: $\mathcal{E}_D(I) = \mathcal{E}_{c^*}(I), \quad c^* \in \mathcal{C}_{\text{ground\_truth}}$
 * **Workflow**:
-  $$\text{Input Image } I \longrightarrow \text{Ground-Truth Condition } c^* \longrightarrow \mathcal{E}_{c^*}(I) \longrightarrow I_{oracle} \longrightarrow \text{YOLO11n} \longrightarrow \hat{Y}$$
-* **Empirical Purpose**: Eliminates classifier routing errors completely by providing the ground-truth condition label $c^*$. This measures the theoretical maximum enhancement benefit isolated from classifier misclassification.
+  $$\text{Input } I + \text{Ground-Truth Metadata } c^* \longrightarrow \mathcal{E}_{c^*}(I) \longrightarrow I' \longrightarrow \text{YOLO11n} \longrightarrow \hat{\mathcal{Y}}_D$$
+* **Methodological Role**: Provides an ablation study ceiling. If Pipeline C underperforms Pipeline D, the performance penalty is strictly due to CNN classification error. If Pipeline D underperforms Pipeline A, then the physical image enhancement transformations themselves degrade neural feature activations regardless of classification accuracy.
+
+---
+
+### Step-by-Step Pipeline Execution Trace (Every Single Step Detailed)
+
+This section documents every single mathematical, architectural, and data-flow step executed when an image passes through the complete pipeline from raw sensor pixels to validated bounding boxes and research evaluation metrics:
+
+```
+[Step 1: Raw Image] ──▶ [Step 2: CNN Pre-proc] ──▶ [Step 3: ResNet-18 Backbone] ──▶ [Step 4: Pooling & Head]
+                                                                                              │
+┌─────────────────────────────────────────────────────────────────────────────────────────────┘
+▼
+[Step 5: Softmax & Routing Decision (ĉ)] ──▶ [Step 6: Deterministic Physical Enhancer E_ĉ(I)]
+                                                                    │
+┌───────────────────────────────────────────────────────────────────┘
+▼
+[Step 7: YOLO Letterboxing (640x640)] ──▶ [Step 8: CSPDarknet + PANet] ──▶ [Step 9: Decoupled Anchor-Free Head]
+                                                                                              │
+┌─────────────────────────────────────────────────────────────────────────────────────────────┘
+▼
+[Step 10: Confidence Thresholding + NMS Pruning] ──▶ [Step 11: Quantitative Metrics & Validation]
+```
+
+---
+
+#### Step 1: Input Ingestion & Raw Matrix Initialization
+* **Input**: Uncompressed raw driving camera image from the BDD100K driving benchmark.
+* **Matrix Representation**: Stored as a three-dimensional NumPy array in OpenCV BGR channel ordering:
+  $$I \in \mathbb{R}^{H \times W \times 3}, \quad I(y, x, c) \in \{0, 1, \dots, 255\} \subset \mathbb{Z}_{\ge 0}$$
+  Standard BDD100K camera resolution: $H = 720$ pixels, $W = 1280$ pixels, 3 color channels ($B, G, R$).
+* **Memory Footprint**: $720 \times 1280 \times 3 = 2,764,800\text{ bytes} \approx 2.64\text{ MB}$ uncompressed per frame.
+
+---
+
+#### Step 2: Pre-Processing for Convolutional Condition Router
+To prepare the high-resolution input for the ResNet-18 classifier without altering aspect ratios destructively:
+1. **Color Order Conversion**: Converts OpenCV BGR memory buffer to standard perceptual RGB:
+   $$I_{RGB}(x, y) = \left[ I_B(x, y), \; I_G(x, y), \; I_R(x, y) \right] \to \left[ I_R(x, y), \; I_G(x, y), \; I_B(x, y) \right]$$
+2. **Spatial Resampling**: Bilinear interpolation rescales the input tensor to the canonical classification grid:
+   $$I_{224} = \text{Resize}\left(I_{RGB}, \; (224, 224)\right)$$
+3. **Channel-First Transposition & Floating-Point Cast**:
+   Transforms shape $[224, 224, 3]$ uint8 into PyTorch tensor $[3, 224, 224]$ with dynamic range normalized to $[0.0, 1.0]$.
+4. **ImageNet Statistical Standardization**:
+   Normalizes channel distributions against the ImageNet-1K population mean and standard deviation:
+   $$X_{norm}^{(c)}(x, y) = \frac{I_{224}^{(c)}(x, y) - \mu_c}{\sigma_c}, \quad \mu = [0.485, 0.456, 0.406], \; \sigma = [0.229, 0.224, 0.225]$$
+5. **Batch Dimension Expansion**:
+   Appends a leading batch index yielding classification tensor:
+   $$\mathbf{X}_{in} \in \mathbb{R}^{1 \times 3 \times 224 \times 224}$$
+
+---
+
+#### Step 3: Deep Feature Extraction via ResNet-18 Backbone
+The normalized tensor $\mathbf{X}_{in}$ propagates through the 18-layer deep convolutional backbone:
+1. **Stem Layer**:
+   * Convolution: $\text{Conv2d}(3 \to 64, \text{kernel}=7\times 7, \text{stride}=2, \text{padding}=3) \implies \mathbb{R}^{1 \times 64 \times 112 \times 112}$
+   * Batch Normalization: $\text{BatchNorm2d}(64)$ with learned scale $\gamma$ and shift $\beta$.
+   * Activation: Rectified Linear Unit $\text{ReLU}(z) = \max(0, z)$.
+   * Spatial Downsampling: $\text{MaxPool2d}(\text{kernel}=3\times 3, \text{stride}=2, \text{padding}=1) \implies \mathbb{R}^{1 \times 64 \times 56 \times 56}$
+2. **Residual Stage 1** (2 BasicBlocks, no spatial downsampling):
+   * Block 1.1: $\text{Conv}_{3\times 3}(64 \to 64) \to \text{BN} \to \text{ReLU} \to \text{Conv}_{3\times 3}(64 \to 64) \to \text{BN} + \text{Shortcut}(I) \to \text{ReLU}$
+   * Block 1.2: Second residual iteration $\implies \mathbb{R}^{1 \times 64 \times 56 \times 56}$
+3. **Residual Stage 2** (2 BasicBlocks with $2\times$ stride downsampling):
+   * Downsampling shortcut: $1 \times 1$ convolution with stride 2 projects channels $64 \to 128$.
+   * Feature map output: $\mathbb{R}^{1 \times 128 \times 28 \times 28}$
+4. **Residual Stage 3** (2 BasicBlocks with $2\times$ stride downsampling):
+   * Downsampling shortcut: $1 \times 1$ convolution with stride 2 projects channels $128 \to 256$.
+   * Feature map output: $\mathbb{R}^{1 \times 256 \times 14 \times 14}$
+5. **Residual Stage 4** (2 BasicBlocks with $2\times$ stride downsampling):
+   * Downsampling shortcut: $1 \times 1$ convolution with stride 2 projects channels $256 \to 512$.
+   * Feature map output: $\mathbf{F}_4 \in \mathbb{R}^{1 \times 512 \times 7 \times 7}$
+
+---
+
+#### Step 4: Global Spatial Pooling & Logit Generation
+1. **Adaptive Average Pooling**:
+   Collapses the two-dimensional spatial activations ($7 \times 7$) into a spatial-invariant embedding:
+   $$\mathbf{h} = \text{AdaptiveAvgPool2d}((1, 1))(\mathbf{F}_4) = \frac{1}{49} \sum_{u=1}^7 \sum_{v=1}^7 \mathbf{F}_4[:, :, u, v] \in \mathbb{R}^{1 \times 512}$$
+2. **Flattening**:
+   Reshapes tensor into a 512-dimensional continuous representation vector.
+3. **Stochastic Regularization**:
+   Passes vector through a dropout operator ($p = 0.3$ during fine-tuning; identity scaling during inference).
+4. **Linear Fully-Connected Projection**:
+   Projects 512-dimensional latent feature vector onto the 5 target condition classes:
+   $$\mathbf{z} = \mathbf{h} \cdot \mathbf{W}_{fc}^T + \mathbf{b}_{fc}, \quad \mathbf{W}_{fc} \in \mathbb{R}^{5 \times 512}, \; \mathbf{b}_{fc} \in \mathbb{R}^5 \implies \mathbf{z} = [z_0, z_1, z_2, z_3, z_4]$$
+
+---
+
+#### Step 5: Softmax Normalization & Dynamic Condition Routing
+1. **Posterior Probability Computation**:
+   Converts unconstrained real-valued logits $\mathbf{z}$ into a calibrated probability distribution using the Softmax activation:
+   $$P(c = j \mid I) = \frac{\exp(z_j)}{\sum_{k=0}^{4} \exp(z_k)}, \quad \sum_{j=0}^{4} P(c = j \mid I) = 1.0$$
+   * Target classes: $0: \text{Clear}, \; 1: \text{Rain}, \; 2: \text{Fog}, \; 3: \text{Night}, \; 4: \text{Dawn/Dusk}$.
+2. **Argmax Decision Rule**:
+   The network selects the most probable environmental degradation class:
+   $$\hat{c} = \arg\max_{j \in \{0, 1, 2, 3, 4\}} P(c = j \mid I)$$
+3. **Routing Confidence Assessment**:
+   The decision confidence is logged: $\text{Confidence} = \max_j P(c = j \mid I) \in [0.20, 1.00]$.
+   If confidence is below a safety threshold or when $\hat{c}=0$, the pipeline safely defaults to the non-destructive baseline operator.
+
+---
+
+#### Step 6: Condition-Specific Deterministic Image Enhancement Dispatch
+The original unmodified image $I \in \mathbb{R}^{720 \times 1280 \times 3}$ is dispatched to the chosen physical enhancement algorithm:
+
+* **Step 6.0 — Branch $\hat{c} = 0$ (Clear Daytime)**:
+  * **Operator**: Identity mapping $\mathcal{E}_{clear}(I) = I$.
+  * **Action**: Returns original pixels directly. Avoids injecting synthetic noise or high-frequency edge ringing into clean driving imagery.
+
+* **Step 6.1 — Branch $\hat{c} = 1$ (Rain)**:
+  * **6.1a**: Bilateral smoothing filter ($d = 7, \sigma_c = 50.0, \sigma_s = 50.0$) suppresses localized vertical rain streaks.
+  * **6.1b**: High-frequency edge map extraction: $I_{highpass} = I_{smooth} - (G_{\sigma=2.0} * I_{smooth})$.
+  * **6.1c**: High-boost unsharp masking: $I_{sharp} = I_{smooth} + 1.2 \cdot I_{highpass}$ restores sharp object silhouettes.
+  * **6.1d**: LAB conversion; CLAHE ($\text{clipLimit} = 1.5, 8\times 8$ grid) applied to $L^*$ channel to restore contrast lost to mist.
+
+* **Step 6.2 — Branch $\hat{c} = 2$ (Fog)**:
+  * **6.2a**: Dark Channel Prior extraction over $15 \times 15$ local patches: $J^{dark}(x) = \min_c(\min_{y \in \Omega(x)} I^c(y))$.
+  * **6.2b**: Atmospheric light vector estimation $A = (A_r, A_g, A_b)$ from top $0.1\%$ brightest dark channel pixels.
+  * **6.2c**: Coarse transmission map estimation: $\tilde{t}(x) = 1 - 0.95 \min_c(\min_\Omega \frac{I^c}{A^c})$.
+  * **6.2d**: Bilateral transmission refinement ($d = 9, \sigma_s = 15.0, \sigma_r = 0.10$) removes step edge halos.
+  * **6.2e**: True scene radiance recovery: $J(x) = \frac{I(x) - A}{\max(t(x), 0.10)} + A$.
+  * **6.2f**: Luminance CLAHE ($\text{clipLimit} = 1.5$) restores balanced contrast.
+
+* **Step 6.3 — Branch $\hat{c} = 3$ (Low-Light & Night)**:
+  * **6.3a**: Nonlinear power-law gamma expansion: $I_\gamma(x) = 255 \cdot (I(x)/255)^{0.60}$ executed in $O(1)$ time via a 256-element precomputed integer lookup table.
+  * **6.3b**: CIE $L^*a^*b^*$ color separation: decouples chromaticity from luminance.
+  * **6.3c**: Local CLAHE equalization on luminance channel $L^*$ ($\text{clipLimit} = 2.5, 8\times 8$ grid tiles).
+  * **6.3d**: Controlled linear expansion ($1.15\times$) with hard saturation clamping $[0, 255]$.
+  * **6.3e**: Inverse color conversion from LAB back to BGR.
+
+* **Step 6.4 — Branch $\hat{c} = 4$ (Dawn/Dusk)**:
+  * **6.4a**: Intermediate gamma illumination lift ($\gamma = 0.85$) mitigates low-angle shadow clipping.
+  * **6.4b**: Horizon gradient equalization via LAB CLAHE ($\text{clipLimit} = 1.8$).
+  * **6.4c**: Midtone contrast expansion pivoted around $L_0 = 128$: $L_{out} = \text{clip}(128 + 1.10 \cdot (L - 128), 0, 255)$.
+
+* **Output of Step 6**: Enhanced image tensor $I' \in \mathbb{R}^{720 \times 1280 \times 3}$ in BGR uint8 format.
+
+---
+
+#### Step 7: Pre-Processing for Deep Object Detector (YOLO11n)
+1. **Letterbox Aspect-Ratio Preserving Scaling**:
+   Calculates minimum scaling ratio $r = \min(640 / 720, 640 / 1280) = 640 / 1280 = 0.50$.
+   Rescales image to $360 \times 640$. Adds top/bottom padding of $(640 - 360) / 2 = 140\text{ pixels}$ with neutral grey value $(114, 114, 114)$.
+2. **Channel Re-ordering & Normalization**:
+   Converts BGR to RGB, transposes layout from $[640, 640, 3]$ to $[3, 640, 640]$, and scales integer values $[0, 255]$ to floating-point range $[0.0, 1.0]$.
+3. **Detector Input Tensor**:
+   Yields batch tensor $\mathbf{X}_{det} \in \mathbb{R}^{1 \times 3 \times 640 \times 640}$.
+
+---
+
+#### Step 8: Multi-Scale Feature Pyramid Forward Pass (YOLO11n)
+1. **CSPDarknet Backbone**:
+   Passes $\mathbf{X}_{det}$ through sequential convolutional stages, Cross-Stage Partial ($C3k2$) blocks, and strided downsampling to extract hierarchical feature maps at three distinct scales:
+   * Stride 8: $P_3$ feature map of spatial shape $[1, 256, 80, 80]$ (high resolution, fine details).
+   * Stride 16: $P_4$ feature map of spatial shape $[1, 512, 40, 40]$ (medium resolution).
+   * Stride 32: $P_5$ feature map of spatial shape $[1, 512, 20, 20]$ (low resolution, rich semantic context).
+2. **Spatial Pyramid Pooling Fast (SPPF)**:
+   Applies parallel $5\times 5$ max pooling operations at the network bottleneck to expand receptive field size without sacrificing feature map fidelity.
+3. **Path Aggregation Network (PANet / FPN Neck)**:
+   Combines top-down semantic pathways with bottom-up spatial localization pathways, concatenating multi-scale features across all three pyramid levels ($P_3, P_4, P_5$).
+
+---
+
+#### Step 9: Decoupled Anchor-Free Detection Head
+At each pyramid scale $P_l$ ($l \in \{3, 4, 5\}$), feature maps branch into two independent decoupled convolutional heads:
+1. **Classification Branch**:
+   Computes class logits across all 80 COCO object classes (cars, buses, trucks, pedestrians, motorcycles, bicycles, traffic signs, traffic lights). Passes through sigmoid activation to produce confidence score $\hat{s} \in [0.0, 1.0]$.
+2. **Box Regression Branch**:
+   Predicts 4 continuous boundary offsets $(\Delta x_1, \Delta y_1, \Delta x_2, \Delta y_2)$ using Distribution Focal Loss (DFL) relative to the grid cell coordinates.
+3. **Raw Bounding Box Generation**:
+   Generates a total of $80 \times 80 + 40 \times 40 + 20 \times 20 = 6,400 + 1,600 + 400 = 8,400$ candidate bounding box proposals:
+   $$\mathcal{B}_{raw} = \{ (\mathbf{b}_i, s_i, c_i) \}_{i=1}^{8400}$$
+
+---
+
+#### Step 10: Confidence Thresholding & Non-Maximum Suppression (NMS)
+1. **Coordinate Unpadding & Inversion**:
+   Subtracts the $140\text{ px}$ letterbox border offset and divides by scale ratio $r = 0.50$, projecting bounding box coordinates back to the original image dimensions ($1280 \times 720$).
+2. **Confidence Score Pruning**:
+   Applies strict confidence cutoff threshold $\tau_{conf} = 0.25$:
+   $$\mathcal{B}_{filtered} = \{ b \in \mathcal{B}_{raw} \mid s_b \ge 0.25 \}$$
+3. **Non-Maximum Suppression (NMS) Overlap Pruning**:
+   * Sorts candidate detections by confidence score in descending order.
+   * Selects highest-scoring detection $b^* = \arg\max s_b$ and adds to final detection set $\hat{\mathcal{Y}}$.
+   * Discards all remaining candidate boxes $b_j$ that overlap with $b^*$ above the IoU suppression threshold:
+     $$\text{IoU}(b^*, b_j) = \frac{\text{Area}(b^* \cap b_j)}{\text{Area}(b^* \cup b_j)} \ge \tau_{IoU} = 0.50 \implies \text{Discard } b_j$$
+   * Iterates until all candidates are processed.
+4. **Final Prediction Output**:
+   Produces the final detection list for the image:
+   $$\hat{\mathcal{Y}} = \{ (\text{bbox}_{xyxy}, \text{confidence}, \text{class\_id}, \text{class\_name})_m \}_{m=1}^{M}$$
+
+---
+
+#### Step 11: Statistical Metric Aggregation & Comprehensive Evaluation
+1. **IoU Matching Against Ground Truth**:
+   Every predicted box $\hat{\mathbf{b}}_m$ is matched against ground-truth annotations $\mathbf{b}_k \in \mathcal{Y}_{GT}$. A detection is marked as a **True Positive (TP)** if $\text{IoU}(\hat{\mathbf{b}}_m, \mathbf{b}_k) \ge 0.50$ and class matches; otherwise, it is a **False Positive (FP)**. Unmatched ground-truth boxes are **False Negatives (FN)**.
+2. **Metric Computation**:
+   * Precision: $P = \frac{TP}{TP + FP}$
+   * Recall: $R = \frac{TP}{TP + FN}$
+   * F1-Score: $F_1 = 2 \cdot \frac{P \cdot R}{P + R}$
+3. **Average Precision (AP) & mAP Calculation**:
+   Precision-Recall curves are interpolated across 101 standard recall recall positions:
+   $$\text{AP} = \frac{1}{101} \sum_{r \in \{0.0, 0.01, \dots, 1.0\}} \max_{\tilde{r} \ge r} P(\tilde{r})$$
+   * $\text{mAP@50}$: Mean AP across all classes at $\text{IoU} = 0.50$.
+   * $\text{mAP@50:95}$: COCO standard mean AP averaged across 10 IoU thresholds from $0.50$ to $0.95$ in steps of $0.05$.
+4. **Condition-Wise Stratification**:
+   Metrics are aggregated separately for Clear ($N=45$), Rain ($N=44$), Fog ($N=2$), Night ($N=45$), and Dawn/Dusk ($N=44$) to validate scientific hypotheses H1–H4.
 
 ---
 
 ## 4. Condition-Specific Enhancement Algorithms & Mathematical Formulations
 
-Every enhancement module in `src/enhancement/` is strictly parameterized and grounded in computer vision theory:
+Every algorithmic enhancer in `src/enhancement/` is strictly parameterized and derived from physical optics and signal processing models:
 
-### 1. Fog Dehazing: Dark Channel Prior (DCP)
+```
+                      [ Environmental Condition Routing (\hat{c}) ]
+                                            │
+       ┌──────────────┬─────────────────────┼─────────────────────┬──────────────┐
+       ▼              ▼                     ▼                     ▼              ▼
+   [ CLEAR ]       [ RAIN ]              [ FOG ]              [ NIGHT ]     [ DAWN/DUSK ]
+   Identity      Bilateral +           Dark Channel          Power-Law        Midtone
+ Pass-Through  Unsharp Masking        Prior Dehazing           Gamma          Balancing
+   \mathcal{T}(I)=I   Streak Removal       Atmospheric Scatter    Low-Light Boost Transitional
+```
+
+---
+
+### 4.1 Fog Dehazing: Dark Channel Prior (DCP) & Atmospheric Scattering
+
 * **File**: `src/enhancement/fog.py` | Class: `FogDehazingEnhancer`
-* **Mathematical Basis**: Based on the optical atmospheric scattering model:
-  $$I(x) = J(x)t(x) + A(1 - t(x))$$
-  where $I(x)$ is the observed hazy image, $J(x)$ is the haze-free scene radiance, $A$ is the global atmospheric light, and $t(x)$ is the medium transmission map.
-* **Algorithm Steps**:
-  1. **Dark Channel Estimation**:
-     $$J^{dark}(x) = \min_{c \in \{r,g,b\}} \left( \min_{y \in \Omega(x)} I^c(y) \right)$$
-     using a local square patch $\Omega(x)$ of size $15 \times 15$.
-  2. **Atmospheric Light Estimation ($A$)**: Picks the top $0.1\%$ brightest pixels in the dark channel and selects the vector with maximum intensity in the original image.
-  3. **Coarse Transmission Map**:
-     $$\tilde{t}(x) = 1 - \omega \min_{c} \left( \min_{y \in \Omega(x)} \frac{I^c(y)}{A^c} \right), \quad \omega = 0.95$$
-  4. **Bilateral Transmission Refinement**: Refines $\tilde{t}(x)$ with an edge-preserving bilateral filter ($d=9, \sigma_c=0.1, \sigma_s=15.0$) to avoid halo artifacts around structural boundaries.
-  5. **Scene Radiance Recovery**:
-     $$J(x) = \frac{I(x) - A}{\max(t(x), t_0)} + A, \quad t_0 = 0.1$$
+* **Physical Atmospheric Model**: Optical attenuation through suspended atmospheric aerosols is modeled via the Koschmieder atmospheric scattering formulation:
+  $$I(x) = J(x) t(x) + A (1 - t(x))$$
+  where:
+  * $I(x)$ is the observed degraded RGB image at pixel coordinate $x = (u, v)$.
+  * $J(x)$ is the true, haze-free scene radiance to be recovered.
+  * $A \in \mathbb{R}^3$ is the global atmospheric airlight vector.
+  * $t(x) = \exp(-\beta d(x)) \in [0, 1]$ is the transmission medium map describing the portion of light that reaches the camera sensor without scattering, governed by the atmospheric scattering coefficient $\beta$ and scene depth $d(x)$.
+
+#### Algorithmic Reconstruction Steps:
+1. **Dark Channel Extraction**:
+   In non-sky patches of haze-free outdoor imagery, at least one color channel has pixels with near-zero intensity due to shadows, colorful surfaces, and dark objects (He et al., 2010):
+   $$J^{dark}(x) = \min_{c \in \{r, g, b\}} \left( \min_{y \in \Omega(x)} I^c(y) \right)$$
+   where $\Omega(x)$ is a local square structuring patch of size $15 \times 15$ centered at pixel $x$.
+2. **Global Atmospheric Airlight Vector Estimation ($A$)**:
+   The brightest $0.1\%$ pixels in the dark channel $J^{dark}$ are identified. Among these candidate coordinates $\mathcal{P}_{top}$, the global atmospheric light vector is estimated as the pixel with the highest intensity in the original input image:
+   $$A = \arg\max_{I(x), \, x \in \mathcal{P}_{top}} \left( \sum_{c \in \{r, g, b\}} I^c(x) \right)$$
+3. **Coarse Transmission Map Estimation**:
+   Normalizing the atmospheric scattering model by $A^c$ yields:
+   $$\tilde{t}(x) = 1 - \omega \min_{c \in \{r, g, b\}} \left( \min_{y \in \Omega(x)} \frac{I^c(y)}{A^c} \right)$$
+   where $\omega = 0.95$ is a haze retention factor that preserves natural atmospheric perspective for distant objects.
+4. **Edge-Preserving Transmission Refinement**:
+   Because the local patch $\Omega(x)$ introduces step discontinuities across object boundaries, the transmission map is refined using a bilateral filter:
+   $$t(x) = \frac{1}{W_x} \sum_{y \in \mathcal{N}(x)} \tilde{t}(y) \exp\left( -\frac{\|x - y\|^2}{2\sigma_s^2} \right) \exp\left( -\frac{|\tilde{t}(x) - \tilde{t}(y)|^2}{2\sigma_r^2} \right)$$
+   with neighborhood diameter $d = 9$, spatial variance $\sigma_s = 15.0$, and range variance $\sigma_r = 0.10$.
+5. **Scene Radiance Recovery & Clamping**:
+   $$J(x) = \frac{I(x) - A}{\max\left(t(x), \, t_0\right)} + A$$
+   where $t_0 = 0.10$ prevents division-by-zero singularities in dense haze regions.
+6. **Dynamic Range Post-Equalization**:
+   The dehazed image $J(x)$ is converted to LAB color space, and gentle CLAHE ($\text{clipLimit} = 1.5$) is applied to the $L^*$ channel to restore lost luminance contrast.
 
 ---
 
-### 2. Rain Enhancement: Bilateral Filtering & Unsharp Masking
+### 4.2 Rain Enhancement: Bilateral Decomposition, High-Boost Unsharp Masking & CLAHE
+
 * **File**: `src/enhancement/rain.py` | Class: `ClassicalRainEnhancer`
-* **Algorithm Steps**:
-  1. **Rain Streak Attenuation**: Edge-preserving bilateral filter smooths high-frequency streak noise while maintaining object edges:
-     $$I_{smooth}(x) = \frac{1}{W_p} \sum_{x_i \in \Omega} I(x_i) f_r(\|I(x_i) - I(x)\|) g_s(\|x_i - x\|)$$
-     with $d=7, \sigma_{\text{color}}=50.0, \sigma_{\text{space}}=50.0$.
-  2. **Unsharp Masking Boundary Restoration**:
-     $$I_{blur} = G_{\sigma=2.0} * I_{smooth}$$
-     $$I_{highpass} = I_{smooth} - I_{blur}$$
-     $$I_{sharp} = I_{smooth} + 1.2 \times I_{highpass}$$
-  3. **Luminance Contrast Equalization**: Converts $I_{sharp}$ to LAB color space and applies CLAHE ($\text{clipLimit}=1.5$) to the $L$ channel.
+* **Signal Degradation Model**: A rainy image is modeled as a linear superposition of clean scene radiance $J(x)$ and high-frequency streak noise components $S(x)$:
+  $$I(x) = J(x) + S(x) + \eta(x)$$
+  where $S(x)$ represents oriented bright rain streaks and $\eta(x)$ is zero-mean sensor noise.
+
+#### Algorithmic Reconstruction Steps:
+1. **Rain Streak Attenuation via Bilateral Smoothing**:
+   Rain streaks exhibit localized high-frequency gradients. An edge-preserving bilateral filter smooths out streaks while conserving structural object contours:
+   $$I_{smooth}(x) = \frac{1}{W_p} \sum_{x_i \in \Omega(x)} I(x_i) \cdot g_s\left(\|x_i - x\|\right) \cdot f_r\left(\|I(x_i) - I(x)\|\right)$$
+   $$g_s\left(\|x_i - x\|\right) = \exp\left( -\frac{\|x_i - x\|^2}{2 \sigma_{\text{space}}^2} \right), \quad f_r\left(\|I(x_i) - I(x)\|\right) = \exp\left( -\frac{\|I(x_i) - I(x)\|^2}{2 \sigma_{\text{color}}^2} \right)$$
+   with filter diameter $d = 7$, $\sigma_{\text{space}} = 50.0$, and $\sigma_{\text{color}} = 50.0$.
+2. **High-Boost Boundary Restoration (Unsharp Masking)**:
+   Because streak removal slightly attenuates high-frequency object edges, an unsharp masking operator extracts and amplifies true structural edges:
+   $$I_{blur}(x) = \left( G_{\sigma=2.0} * I_{smooth} \right)(x)$$
+   $$I_{highpass}(x) = I_{smooth}(x) - I_{blur}(x)$$
+   $$I_{sharp}(x) = I_{smooth}(x) + \beta \cdot I_{highpass}(x), \quad \beta = 1.2$$
+3. **Local Luminance Equalization**:
+   $I_{sharp}$ is transformed into CIE $L^*a^*b^*$ color space. The $L^*$ channel is equalized using CLAHE ($\text{clipLimit} = 1.5, \text{grid} = 8 \times 8$) to compensate for rain-induced contrast drop.
 
 ---
 
-### 3. Night Enhancement: Power-Law Gamma & Illumination Equalization
+### 4.3 Low-Light & Night Enhancement: Power-Law Gamma & Luminance CLAHE
+
 * **File**: `src/enhancement/night.py` | Class: `LowLightNightEnhancer`
-* **Algorithm Steps**:
-  1. **Nonlinear Gamma Expansion**: Restores underexposed shadow detail using a precomputed lookup table:
-     $$I_{\gamma} = 255 \times \left( \frac{I}{255} \right)^\gamma, \quad \gamma = 0.60$$
-  2. **Luminance Channel CLAHE**: Converts to LAB color space and applies CLAHE ($\text{clipLimit}=2.5, \text{grid}=(8, 8)$) to expand local contrast without blowing out vehicle headlights.
-  3. **Controlled Luminance Boost**: Applies subtle linear brightness scaling ($1.15\times$) with hard saturation clipping at $[0, 255]$.
+* **Photon-Starvation Degradation Model**: Under nocturnal driving conditions, imaging sensors suffer from severe photon starvation and non-uniform artificial lighting (headlights, streetlamps). The response follows a nonlinear compression:
+  $$I(x) \propto E(x)^\alpha, \quad \alpha \ll 1$$
+
+#### Algorithmic Reconstruction Steps:
+1. **Nonlinear Power-Law Gamma Expansion**:
+   To expand dark shadow details without saturating bright streetlights or oncoming headlights, a nonlinear power-law transformation is applied:
+   $$I_{\gamma}(x) = 255 \cdot \left( \frac{I(x)}{255} \right)^{\gamma}, \quad \gamma = 0.60$$
+   *Lookup Table Acceleration*: Since pixel values are integers $v \in [0, 255]$, the mapping is precomputed in an $O(1)$ lookup table:
+   $$\text{LUT}[v] = \text{clip}\left( \text{round}\left( 255 \cdot \left( \frac{v}{255} \right)^{0.60} \right), 0, 255 \right)$$
+2. **Decoupled Chrominance Luminance CLAHE**:
+   Operating directly on RGB channels would cause severe chromatic distortion and unnatural color casts. The image is transformed to CIE $L^*a^*b^*$, and CLAHE is applied strictly to $L^*$:
+   $$\text{clipLimit} = 2.5, \quad \text{tileGridSize} = 8 \times 8$$
+   The clip limit restricts the maximum slope of the local cumulative distribution function (CDF), preventing excessive amplification of high-frequency camera noise in underexposed regions.
+3. **Controlled Luminance Scaling**:
+   A mild global scaling factor is applied to lift ambient road contrast:
+   $$L'_{night} = \text{clip}\left( 1.15 \cdot L^*_{CLAHE}, 0, 255 \right)$$
+   The image is converted back to BGR space for YOLO inference.
 
 ---
 
-### 4. Dawn/Dusk Enhancement: Dynamic Range Balancing
+### 4.4 Dawn/Dusk Enhancement: Transitional Dynamic Range Balancing
+
 * **File**: `src/enhancement/dawn_dusk.py` | Class: `DawnDuskEnhancer`
-* **Algorithm Steps**:
-  1. Moderate gamma correction ($\gamma = 0.85$) to lift transitional underexposure.
-  2. CLAHE with gentle clip limit ($1.8$) to equalize gradient lighting across the horizon.
-  3. Midtone contrast expansion:
-     $$L_{out} = \text{clip}\left(128 + 1.10 \times (L - 128), 0, 255\right)$$
+* **Transitional Lighting Challenge**: Crepuscular driving imagery is characterized by high dynamic range: extreme backlit horizon glare coupled with underexposed road surfaces.
+
+#### Algorithmic Reconstruction Steps:
+1. **Transitional Gamma Correction**:
+   A mild gamma expansion lifts low-angle shadows:
+   $$I_{\gamma}(x) = 255 \cdot \left( \frac{I(x)}{255} \right)^{0.85}$$
+2. **Horizon Equalization CLAHE**:
+   Converts to LAB space and applies CLAHE with clip limit $\kappa = 1.8$ on $8 \times 8$ grid tiles to balance steep gradients between the sky and the road.
+3. **Midtone Contrast Expansion**:
+   Applies symmetric contrast expansion pivoted around the midpoint luminance ($L_0 = 128$):
+   $$L_{final}(x) = \text{clip}\left( 128 + \alpha \cdot \left( L(x) - 128 \right), \; 0, \; 255 \right), \quad \alpha = 1.10$$
 
 ---
 
-### 5. Clear Condition: Identity Pass-Through
+### 4.5 Clear Condition: The Identity Pass-Through Operator
+
 * **File**: `src/enhancement/dawn_dusk.py` | Class: `ClearPassThroughEnhancer`
-* **Rationale**: Clear daylight imagery does not suffer from atmospheric or illumination degradation. Passing images through unneeded filters risks introducing edge artifacts or noise, directly validating H3.
-  $$I_{enhanced} = I_{original}$$
+* **Formal Definition**:
+  $$\mathcal{T}_{clear}(I) = I$$
+* **Theoretical Justification**: Modern deep object detectors like YOLO are trained predominantly on clear, high-visibility imagery. Their convolutional kernels have optimized activation responses for natural gradients. Applying any spatial-domain filter (such as CLAHE or unsharp masking) to clear images introduces artificial high-frequency textures, ringing artifacts, and noise amplification. By routing clear images through an identity pass-through, the system protects pristine features and directly tests hypothesis **H3**.
 
 ---
 
@@ -533,3 +904,4 @@ This project is licensed under the BSD 3-Clause License. If this benchmark or me
   howpublished={\url{https://github.com/adaptive-yolo-research}}
 }
 ```
+
